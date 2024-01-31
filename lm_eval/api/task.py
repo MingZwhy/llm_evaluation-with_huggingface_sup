@@ -5,7 +5,6 @@ import random
 import re
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
-from inspect import getsource
 from typing import Any, List, Literal, Tuple, Union
 
 import datasets
@@ -37,6 +36,7 @@ ALL_OUTPUT_TYPES = [
     "loglikelihood_rolling",
     "generate_until",
 ]
+
 
 eval_logger = logging.getLogger("lm-eval")
 
@@ -74,12 +74,7 @@ class TaskConfig(dict):
     num_fewshot: int = None
     # scoring options
     metric_list: list = None
-    output_type: Literal[
-        "loglikelihood",
-        "loglikelihood_rolling",
-        "generate_until",
-        "multiple_choice",
-    ] = "generate_until"
+    output_type: str = "generate_until"
     generation_kwargs: dict = None
     repeats: int = 1
     filter_list: Union[str, list] = None
@@ -115,13 +110,15 @@ class TaskConfig(dict):
                     "do_sample": False,
                 }
 
+        # TODO: how to make TaskConfigs be de- and re-serializable, even when using the !function constructor?
+
     def __getitem__(self, item):
         return getattr(self, item)
 
     def __setitem__(self, item, value):
         return setattr(self, item, value)
 
-    def to_dict(self, keep_callable: bool = False) -> dict:
+    def to_dict(self, keep_callable=False):
         """dumps the current config as a dictionary object, as a printable format.
         null fields will not be printed.
         Used for dumping results alongside full task configuration
@@ -136,33 +133,13 @@ class TaskConfig(dict):
         for k, v in list(cfg_dict.items()):
             if v is None:
                 cfg_dict.pop(k)
-            elif k == "metric_list":
-                for metric_dict in v:
-                    for metric_key, metric_value in metric_dict.items():
-                        if callable(metric_value):
-                            metric_dict[metric_key] = self.serialize_function(
-                                metric_value, keep_callable=keep_callable
-                            )
-                cfg_dict[k] = v
-            elif callable(v):
-                cfg_dict[k] = self.serialize_function(v, keep_callable=keep_callable)
+            elif isinstance(v, Callable):
+                if keep_callable:
+                    cfg_dict[k] = v
+                else:
+                    # TODO: this should handle Promptsource template objects as a separate case?
+                    cfg_dict[k] = str(v)
         return cfg_dict
-
-    def serialize_function(
-        self, value: Union[Callable, str], keep_callable=False
-    ) -> Union[Callable, str]:
-        """Serializes a given function or string.
-
-        If 'keep_callable' is True, the original callable is returned.
-        Otherwise, attempts to return the source code of the callable using 'getsource'.
-        """
-        if keep_callable:
-            return value
-        else:
-            try:
-                return getsource(value)
-            except (TypeError, OSError):
-                return str(value)
 
 
 class Task(abc.ABC):
@@ -513,7 +490,7 @@ class Task(abc.ABC):
     def apply_filters(self):
         if hasattr(self, "_filters"):
             for f in self._filters:
-                f.apply(self._instances)
+                f.apply(self._instances, None)
         else:
             eval_logger.warning("No filter defined, passing through instances")
             return self._instances
@@ -649,15 +626,16 @@ class ConfigurableTask(Task):
         if self.config.filter_list is not None:
             self._filters = []
             for filter_config in self.config.filter_list:
-                filter_name = filter_config["name"]
-                filter_functions = filter_config["filter"]
-                components = []
-                for function in filter_functions:
-                    kwargs = {
-                        key: function[key] for key in function if key != "function"
-                    }
-                    components.append([function["function"], kwargs])
-                filter_pipeline = build_filter_ensemble(filter_name, components)
+                for filter_pipeline in filter_config:
+                    filter_name = filter_config["name"]
+                    filter_functions = filter_config["filter"]
+                    components = []
+                    for function in filter_functions:
+                        kwargs = {
+                            key: function[key] for key in function if key != "function"
+                        }
+                        components.append([function["function"], kwargs])
+                    filter_pipeline = build_filter_ensemble(filter_name, components)
                 self._filters.append(filter_pipeline)
         else:
             self._filters = [build_filter_ensemble("none", [["take_first", None]])]
@@ -736,11 +714,32 @@ class ConfigurableTask(Task):
                     )
 
     def download(self, dataset_kwargs=None) -> None:
-        self.dataset = datasets.load_dataset(
-            path=self.DATASET_PATH,
-            name=self.DATASET_NAME,
-            **dataset_kwargs if dataset_kwargs is not None else {},
-        )
+        
+        print("path: ", self.DATASET_PATH)
+        print("name: ", self.DATASET_NAME)
+        print("kwargs: ", dataset_kwargs)
+        print("try to load datasets from disk")
+        try:
+            if(self.DATASET_PATH == 'EleutherAI/lambada_openai'):
+                self.dataset = datasets.load_dataset(
+                    path = '/home/chenyuanteng/.cache/huggingface/datasets/datasets--EleutherAI--lambada_openai/lambada_openai/data/',
+                    name=self.DATASET_NAME,
+                    **dataset_kwargs if dataset_kwargs is not None else {}
+                )
+            elif(self.DATASET_PATH == 'hellaswag'):
+                self.dataset = datasets.load_dataset(
+                    path = '/home/chenyuanteng/.cache/huggingface/datasets/datasets--Rowan--hellaswag/hellaswag.py',
+                    name=self.DATASET_NAME,
+                    **dataset_kwargs if dataset_kwargs is not None else {}
+                )
+        except:
+            print("loading from local failed, donwload from huggingface")
+            self.dataset = datasets.load_dataset(
+                path=self.DATASET_PATH,
+                name=self.DATASET_NAME,
+                **dataset_kwargs if dataset_kwargs is not None else {},
+            )
+            
 
     def has_training_docs(self) -> bool:
         if self.config.training_split is not None:
@@ -835,7 +834,7 @@ class ConfigurableTask(Task):
     def apply_filters(self):
         if hasattr(self, "_filters"):
             for f in self._filters:
-                f.apply(self._instances)
+                f.apply(self._instances, self.task_docs)
         else:
             eval_logger.warning("No filter defined, passing through instances")
             return self._instances
