@@ -718,11 +718,11 @@ class ConfigurableTask(Task):
         print("path: ", self.DATASET_PATH)
         print("name: ", self.DATASET_NAME)
         print("kwargs: ", dataset_kwargs)
-        print("try to load datasets from disk")
+        print("---------------------try to load datasets from disk---------------------")
         try:
             if(self.DATASET_PATH == 'EleutherAI/lambada_openai'):
                 self.dataset = datasets.load_dataset(
-                    path = '/home/chenyuanteng/.cache/huggingface/datasets/datasets--EleutherAI--lambada_openai/lambada_openai/data/',
+                    path = '/home/chenyuanteng/.cache/huggingface/datasets/datasets--EleutherAI--lambada_openai/data/', # lambada_openai.py',
                     name=self.DATASET_NAME,
                     **dataset_kwargs if dataset_kwargs is not None else {}
                 )
